@@ -112,6 +112,49 @@ make unit_tests integration_tests
 - DSP FIR is scalar by default; SIMD path (`FirFilterSimd`) is guarded behind `#ifdef __AVX2__` and requires 32-byte aligned input buffers.
 - Memory footprint target: < 64 MB (ring buffers + taps + plugin code).
 
+## Real Data Ingestion
+
+### Recorded `.iq` Files (works today)
+`FileSource` reads binary interleaved 8-bit unsigned IQ (`uint8_t I`, `uint8_t Q`) normalized to `[-1.0, 1.0]`. Any RTL-SDR or HackRF raw capture saved as binary works:
+
+```cpp
+auto source = std::make_unique<sdr::FileSource>("real_capture.iq", 8192);
+```
+
+### Live RTL-SDR USB
+A `RtlSdrSource` stub is planned (see `include/ISource.hpp`). To ingest live RF, implement an `ISource` subclass that wraps `librtlsdr`:
+
+```cpp
+class RtlSdrSource : public ISource {
+public:
+    void start() override {
+        // rtlsdr_open(ctx, index); rtlsdr_set_sample_rate(ctx, rate);
+        // Launch readLoop thread calling rtlsdr_read_sync()
+    }
+    void setCallback(DataCallback cb) override { m_callback = std::move(cb); }
+    void stop() override { rtlsdr_close(ctx); }
+private:
+    void readLoop() {
+        uint8_t* buf = ...; // librtlsdr bulk buffer
+        while (running) {
+            int n_read = rtlsdr_read_sync(ctx, buf, chunk_size, &n_read);
+            if (n_read >= 0 && m_callback) {
+                std::vector<std::complex<float>> floatBuf(chunk_size/2);
+                for (size_t i = 0; i < chunk_size/2; ++i) {
+                    float i_val = (buf[2*i] - 127.5f) / 128.0f;
+                    float q_val = (buf[2*i+1] - 127.5f) / 128.0f;
+                    floatBuf[i] = std::complex<float>(i_val, q_val);
+                }
+                m_callback(floatBuf.data(), chunk_size/2);
+            }
+        }
+    }
+    rtlsdr_dev_t* ctx = nullptr;
+};
+```
+
+Link against `librtlsdr` in `CMakeLists.txt` (`find_library` or `pkg_check_modules`).
+
 ## References
 
 - Low-Level Design: [`LLD.md`](LLD.md)
