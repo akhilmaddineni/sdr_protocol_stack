@@ -1,0 +1,6 @@
+build/
+*.o
+*.a
+*.so
+*.dylib
+tests/mock_data.iq
