@@ -45,9 +45,7 @@ A scalar loop computes one `y[n]` per iteration. AVX2 (`__m256`) processes 8 flo
 - Input buffers should be a multiple of 4 or 8 complex samples to avoid partial-vector tail handling.
 - Unaligned loads (`_mm256_loadu_ps`) work but are slightly slower than aligned loads (`_mm256_load_ps`).
 
-The `FirFilterSimd` class (`include/dsp/FirFilterSimd.hpp`) is guarded by `#ifdef __AVX2__`. If the compiler or CPU does not support AVX2, the scalar `FirFilter` is the safe fallback. The SIMD stub currently applies scalar processing (for portability), but the architecture supports full AVX2 intrinsics when enabled.
-
-Performance expectation: SIMD FIR can achieve 2-4x throughput over scalar for large `len`, depending on tap count and memory bandwidth.
+The `FirFilterSimd` class (`include/dsp/FirFilterSimd.hpp`) is guarded by `#ifdef __AVX2__`. **Current status: the SIMD implementation is a passthrough stub** — `process()` copies input to output without filtering or intrinsics (`src/dsp/FirFilterSimd.cpp`). The scalar `FirFilter` is the only real filter today; treat `FirFilterSimd` as an interface placeholder for the AVX2 port (see `docs/08_benchmarks.md` before quoting speedups).
 
 ## 4. Alignment Requirements
 

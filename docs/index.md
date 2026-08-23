@@ -1,6 +1,15 @@
 # SDR Protocol Stack — Integrated First-Principles Guide
 
-This index links the four foundational concepts (`IQ Sampling`, `Ring Buffer`, `DSP FIR`, `Plugin Architecture`) into a single coherent pipeline explanation. It is intended for staff-level embedded engineers who need to understand both the mathematics and the software architecture.
+This index links the foundational concepts (`IQ Sampling`, `Ring Buffer`, `DSP FIR`, `Plugin Architecture`, `Threading`) into a single coherent pipeline explanation, and routes you to the right deep dive.
+
+## Quick Start
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+cd build && ctest --output-on-failure        # 10 tests must pass
+cd .. && cp tests/mock_data.iq mock_data.iq
+./build/src/sdr_main                         # Enter stops it; rm mock_data.iq after
+```
 
 ---
 
@@ -68,14 +77,14 @@ flowchart LR
 
 | Component | Implementation File | Design Spec | First-Principles Doc |
 |---|---|---|---|
-| RF / ADC / Normalization | `src/ingress/FileSource.cpp` | `LLD.md` §2.A | `docs/01_iq_sampling.md` |
-| Lock-Free Ring Buffer | `include/buffer/SpscRingBuffer.hpp`<br>`src/buffer/SpscRingBuffer.cpp` | `LLD.md` §2.B | `docs/02_ring_buffer.md` |
-| FIR Filter (Scalar) | `include/dsp/DspBlock.hpp`<br>`src/dsp/FirFilter.cpp` | `LLD.md` §2.C | `docs/03_dsp_fir.md` |
-| FIR Filter (SIMD) | `include/dsp/FirFilterSimd.hpp`<br>`src/dsp/FirFilterSimd.cpp` | `LLD.md` §2.C, §3.2 | `docs/03_dsp_fir.md` |
-| Plugin Architecture | `include/core/IDecoder.hpp`<br>`include/core/PluginManager.hpp` | `LLD.md` §2.D | `docs/04_plugin_arch.md` |
-| Thread Orchestration | `include/core/Orchestrator.hpp`<br>`src/core/Orchestrator.cpp` | `LLD.md` §2.E | `LLD.md` |
-| Mock Data / CI | `tests/mock_data.iq` | `LLD.md` §4 | `docs/01_iq_sampling.md` |
-| Benchmark | `src/benchmark.cpp` | `LLD.md` §8 | `docs/index.md` |
+| RF / ADC / Normalization | `src/ingress/FileSource.cpp` | `LLD.md` §3.A | `docs/01_iq_sampling.md` |
+| Lock-Free Ring Buffer | `include/buffer/SpscRingBuffer.hpp`<br>`src/buffer/SpscRingBuffer.cpp` | `LLD.md` §3.B | `docs/02_ring_buffer.md` |
+| FIR Filter (Scalar) | `include/dsp/DspBlock.hpp`<br>`src/dsp/FirFilter.cpp` | `LLD.md` §3.C | `docs/03_dsp_fir.md` |
+| FIR Filter (SIMD) | `include/dsp/FirFilterSimd.hpp`<br>`src/dsp/FirFilterSimd.cpp` (stub) | `LLD.md` §3.C | `docs/03_dsp_fir.md`, `docs/08_benchmarks.md` |
+| Plugin Architecture | `include/core/IDecoder.hpp`<br>`include/core/PluginManager.hpp` | `LLD.md` §3.D | `docs/04_plugin_arch.md`, `docs/07_plugin_authoring.md` |
+| Thread Orchestration | `include/core/Orchestrator.hpp`<br>`src/core/Orchestrator.cpp` | `LLD.md` §2, §3.E | `docs/05_threading_orchestration.md` |
+| Mock Data / CI | `tests/mock_data.iq` | `LLD.md` §5 | `docs/06_testing_and_ci.md` |
+| Benchmark | `src/benchmark.cpp` (no CMake target) | `LLD.md` §8 | `docs/08_benchmarks.md` |
 
 ---
 
@@ -108,26 +117,30 @@ flowchart LR
 
 - Hot path allocations: zero per sample (`push` / `pop` / `process`).
 - Memory footprint: `< 64 MB` (ring buffer + taps + plugin code).
-- DSP: scalar FIR baseline; SIMD (`AVX2`) provides 2-4x throughput for aligned buffers.
-- Thread priorities: ingress (`SCHED_FIFO` optional, high); DSP (normal); output (low).
-- Shutdown order: reverse creation (output → DSP → ingress) to prevent dangling references.
+- DSP: scalar FIR baseline; SIMD (`AVX2`) path exists but is a passthrough stub today (`docs/08_benchmarks.md`).
+- Thread priorities: all threads run at default priority; `SCHED_FIFO` is an optional roadmap item.
+- Shutdown order: flag off → ingress stop/join → DSP join → output join (`docs/05_threading_orchestration.md` §3).
 
 ---
 
 ## 6. Error Handling (LLD §4)
 
-- `FileSource`: file open failure logs to `std::cerr`, sets `m_running = false`, exits without spawning thread.
-- `SpscRingBuffer`: overflow (`push` returns `false`) — caller (ingress) must retry or drop; no blocking.
-- `PluginManager`: `.so` load failure logs `dlerror()`; pipeline continues with existing decoders.
-- `Orchestrator`: any thread exception triggers cascading `stop()`; all threads joined before destruction.
-- Memory alignment failure (`posix_memalign`) throws `std::bad_alloc`; caught by orchestrator.
+- `FileSource`: file open failure logs to `std::cerr`, clears `m_running`, thread exits cleanly; pipeline idles on an empty ring buffer.
+- `SpscRingBuffer`: overflow / oversize / wrap-splitting `push` returns `false` — caller (ingress) currently drops; no blocking.
+- Non-power-of-two capacity throws `std::invalid_argument` from the constructor.
+- `PluginManager`: `.so` load failure logs `dlerror()`; missing plugin dir logs and returns `false`; pipeline continues with existing decoders.
+- `Orchestrator`: start without a source fails fast; stop is idempotent and always joins spawned threads (`docs/05_threading_orchestration.md`).
 
 ---
 
 ## 7. References
 
 - `docs/01_iq_sampling.md` — ADC, complex baseband, normalization.
-- `docs/02_ring_buffer.md` — Lock-free SPSC, memory ordering, false sharing.
-- `docs/03_dsp_fir.md` — FIR convolution, scalar vs SIMD.
-- `docs/04_plugin_arch.md` — `dlopen`, factory functions, plugin lifecycle.
+- `docs/02_ring_buffer.md` — Lock-free SPSC, memory ordering, false sharing, zero-copy contract.
+- `docs/03_dsp_fir.md` — FIR convolution, scalar vs SIMD (stub status).
+- `docs/04_plugin_arch.md` — `dlopen`, factory functions, plugin lifecycle, security.
+- `docs/05_threading_orchestration.md` — Thread model, startup/shutdown sequencing, join-contract post-mortem.
+- `docs/06_testing_and_ci.md` — Test inventory, mock `.iq` format, CWD rules, CI recipe, known gaps.
+- `docs/07_plugin_authoring.md` — Cookbook for writing and building your own decoder plugin.
+- `docs/08_benchmarks.md` — Benchmark status and methodology; profiling how-to.
 - `LLD.md` — Full low-level design specification (directory mapping, interface contracts, performance constraints).

@@ -22,10 +22,12 @@ void FileSource::start() {
 }
 
 void FileSource::stop() {
-    if (m_running.exchange(false)) {
-        if (m_workerThread.joinable()) {
-            m_workerThread.join();
-        }
+    // Always join if a worker exists. The old `if (m_running.exchange(false))`
+    // gate skipped the join whenever readLoop had already hit EOF and cleared
+    // m_running itself, leaving a joinable std::thread -> std::terminate in ~FileSource.
+    m_running = false;
+    if (m_workerThread.joinable()) {
+        m_workerThread.join();
     }
 }
 

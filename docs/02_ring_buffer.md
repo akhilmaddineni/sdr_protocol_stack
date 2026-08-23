@@ -78,6 +78,10 @@ void consume(size_t len);    // Advances tail after reading
 
 The caller receives `buffer_ref` (a pointer into the ring buffer's internal storage), reads `len` samples, then calls `consume(len)` to release the space. This eliminates heap allocations and memory copies on the hot path — essential for high sample rates (`2+ MHz` IQ streams).
 
+**Chunking asymmetry (as implemented):** writes are all-or-nothing — `push()` rejects a chunk that would overflow *or* split across the wrap boundary — while reads are naturally chunked: `pop()` returns `min(available, capacity - tail_index)`, i.e., the contiguous run up to the end of storage. A producer whose chunks exceed remaining end-of-buffer space will see rejections until the consumer drains past the boundary; size ingress chunks well below capacity, or retry.
+
+Other contract corners: `push()` with `len == 0` or `len > capacity` returns `false`; empty `pop()` returns 0 and sets `buffer_ref = nullptr`; `consume()` must be called at most once per `pop()` with `len <=` the returned count; the template is explicitly instantiated for `std::complex<float>` only (`src/buffer/SpscRingBuffer.cpp`).
+
 ## 6. Overflow Behavior (Backpressure)
 
 The `push()` method returns `false` if the ring buffer is full (`head - tail >= capacity`). There is no blocking: the caller (ingress thread) must decide on backpressure — either drop the chunk or retry. This is an explicit design choice: blocking the USB thread would lose RF samples anyway, so non-blocking with caller-controlled retry/drop is more appropriate for real-time systems.
